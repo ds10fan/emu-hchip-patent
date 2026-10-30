@@ -19,7 +19,8 @@ pub struct Params {
     pub acc_bits: u32,
     /// Clamp (true) or wrap (false) when an adder result does not fit.
     pub acc_saturate: bool,
-    /// Width of the INPUT SIGNAL bus; sign-extended into ACC 10.
+    /// Width of the INPUT SIGNAL bus; sign-extended into ACC 10. Never
+    /// wider than `acc_bits` in effect: a wider setting is clamped.
     pub input_bits: u32,
     /// Width of a DELAY MEMORY 22 word. Writes saturate.
     pub delay_bits: u32,
@@ -378,7 +379,7 @@ impl Section {
         match ctl.acc10 {
             Acc10::Hold => {}
             Acc10::Adder => self.acc10 = sum,
-            Acc10::Input => self.acc10 = wrap(self.input, p.input_bits),
+            Acc10::Input => self.acc10 = wrap(self.input, p.input_bits.min(p.acc_bits)),
         }
         match ctl.acc11 {
             Acc11::Hold => {}

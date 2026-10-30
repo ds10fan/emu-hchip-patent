@@ -29,7 +29,7 @@ pub fn reference_sample(
     let prod = |operand: i64, c: BlockFloat| scale_product(operand * c.mant as i64, c.exp, &mp);
     let [b2, b1, a2, a1] = coefs;
 
-    let x = wrap(x, p.input_bits); // row 0: ACC 10 <- input
+    let x = wrap(x, p.input_bits.min(p.acc_bits)); // row 0: ACC 10 <- input
     let g = if dc { x } else { 0 }; // "(SA = Xn) & DC"
 
     // rows 1, 2: multiplier operands

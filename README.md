@@ -24,6 +24,7 @@ is executed by the microcode and set transparent for the lowpass.
 | `docs/CONTROL_SIGNALS.md` | the control word, the microcode table, and how each field was derived from the reservation table |
 | `docs/WIDTHS_AND_SATURATION.md` | word widths, saturation points, what was measured when they were varied |
 | `docs/VERIFICATION.md` | the lowpass verification: method, traces, measured responses |
+| `docs/PROBLEMS.md` | the problems met while building it and what was decided about each |
 | `PATENT_US5170369.md`, `patent_figs/` | transcription of the patent and crops of its figures |
 | `emupatent.pdf` | the patent; `00634131.pdf` is Rossum's ARMAdillo coefficient-encoding paper, `00482994.pdf` his filter-morphing paper |
 
@@ -58,6 +59,8 @@ cargo run --release -- impulse --dc --fc 1000 > h.csv
 
 Width options accepted by every command: `--acc-bits B --acc-sat
 --delay-bits B --mult-bits B --drop N --mant-bits B --exact-sum --round`.
+In code the same settings are fields of `Params`, for example
+`Params { acc_bits: 20, ..Params::default() }` for a 20-bit accumulator.
 
 Library use:
 
