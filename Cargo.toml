@@ -1,0 +1,12 @@
+[package]
+name = "hchip-filter"
+version = "0.1.0"
+edition = "2021"
+description = "Cycle-level emulator of the E-mu H-chip IIR filter section from US 5,170,369 (FIGs. 6, 7, 8 and the reservation table)"
+license = "MIT"
+
+[dependencies]
+
+[[bin]]
+name = "hfilter"
+path = "src/bin/hfilter.rs"
