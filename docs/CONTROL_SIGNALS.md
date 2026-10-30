@@ -14,12 +14,12 @@ below is `hfilter microcode` output.
 |---|---|---|
 | `mux15` | MUX 15 → adder input 14 | `Z2N` (~Z2), `Z1N` (~Z1), `Acc11`, `Prod` |
 | `mux16` | MUX 16 → adder input 17 | `Z1x2` (line 21), `Acc10`, `Acc10N` (~ACC 10) |
-| `gate` | zero gate on input 17 | `Always` (pass), `Dc` (pass only if DC = 1), `Idc` (pass only if DC = 0) |
+| `gate` | zero gate on input 17 | `Always` (pass), `Dc` (pass only if DC = 1), `Idc` (pass only if DC = 0), `Never` (zero; gain rows) |
 | `cin` | adder carry-in ("Adder CD") | `Zero`, `One`, `Idc` (= NOT DC) |
 | `acc10` | MUX10 → ACC 10 | `Hold`, `Adder`, `Input` |
 | `acc11` | MUX11 → ACC 11 | `Hold`, `Adder`, `Mux16` (the direct line; unused by this microcode) |
 | `mux_m` | MUXM → LATCH 18 data | `Adder`, `Z2`, `Z1` |
-| `load18` | LATCH 18 and LATCH 19 load, with the coefficient to fetch | `-`, `B2`, `B1`, `A2`, `A1` |
+| `load18` | LATCH 18 and LATCH 19 load, with the coefficient to fetch | `-`, `B2`, `B1`, `A2`, `A1`, `G` (gain) |
 | `dmem_write` | DELAY MEMORY 22 write of ACC 11 | `-`, `yes` |
 | `latch_z` | LATCH 13 / LATCH 20 load from DELAY MEMORY 22 | `-`, `yes` |
 
@@ -46,6 +46,25 @@ cycle | mux15 | mux16  | gate   | cin  | acc10 | acc11 | mux_m | load18 | dmem_w
 7     | Prod  | Acc10N | Always | One  | Adder | Hold  | Adder | -      | yes    | -
 8     | Prod  | Acc10N | Always | One  | Adder | Hold  | Adder | -      | -      | -
 ```
+
+Rows 1 to 6 are the poles, rows 7 and 8 the zeros on the same delay
+values; a section without zeros runs the same rows with A2' = 1, A1' = 2.
+
+### With an output gain (`MICROCODE_GAIN`)
+
+Rows 0 to 7 as above, then:
+
+```
+8g    | Prod  | Acc10N | Always | One  | Adder | Hold  | Adder | G      | -      | -
+9     | Prod  | Acc10  | Never  | Zero | Hold  | Hold  | Adder | -      | -      | -
+10    | Prod  | Acc10  | Never  | Zero | Hold  | Hold  | Adder | -      | -      | -
+11    | Prod  | Acc10  | Never  | Zero | Adder | Hold  | Adder | -      | -      | -
+```
+
+Row 8g is row 8 plus a LATCH 18/19 load of the adder output (MAout) with
+the gain coefficient; rows 9 and 10 wait for the multiplier; row 11 passes
+g·MAout through the adder (input 17 gated to zero, carry 0) into ACC 10.
+This is not in the patent; see VOICE.md.
 
 ## Derivation, row by row
 
@@ -98,7 +117,7 @@ column cannot be read literally; the constant latency above is used.
 
 ## Coefficient fetch order
 
-`load18` fetches B2', B1', A2', A1' in that order. The FIG. 8 decoder needs
+`load18` fetches B2', B1', A2', A1' (and G) in that order. The FIG. 8 decoder needs
 it: a first coefficient (B1', A1') is a difference added to the second
 coefficient held in LATCH 47, so the second must be decoded first (6:24-33).
 The emulator's `Coef::kind()` maps B2/A2 to `Second` and B1/A1 to `First`.

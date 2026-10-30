@@ -22,9 +22,9 @@ fn section(dc: bool, fc: f64, q: f64, p: Params) -> Section {
     s
 }
 
-fn max_gain(eff: [f64; 4], dc: bool) -> f64 {
+fn max_gain(eff: [f64; 5], dc: bool) -> f64 {
     (0..=2400)
-        .map(|k| ideal_response(eff, dc, PI * k as f64 / 2400.0).abs())
+        .map(|k| ideal_response(eff, dc, false, PI * k as f64 / 2400.0).abs())
         .fold(0.0, f64::max)
 }
 
@@ -38,7 +38,7 @@ fn sine_errors(dc: bool, fc: f64, q: f64, p: Params, freqs: &[f64]) -> Vec<(f64,
         .map(|&f| {
             let mut s = section(dc, fc, q, p);
             let g = sine_gain(&mut s, f, FS, amp, 4096, 8192);
-            let ideal = ideal_response(eff, dc, 2.0 * PI * f / FS).abs();
+            let ideal = ideal_response(eff, dc, false, 2.0 * PI * f / FS).abs();
             assert_eq!(s.stats.delay_sat, 0, "delay saturated at {f} Hz");
             (f, db(g), db(ideal))
         })
@@ -141,7 +141,7 @@ fn impulse_dft_matches_away_from_dc() {
         for f in [500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0] {
             let w = 2.0 * PI * f / FS;
             let meas = db(dft(&h, w).abs() / amp as f64);
-            let ideal = db(ideal_response(eff, dc, w).abs());
+            let ideal = db(ideal_response(eff, dc, false, w).abs());
             assert!(
                 (meas - ideal).abs() < 0.15,
                 "dc={dc} {f} Hz: {meas:.2} vs {ideal:.2}"

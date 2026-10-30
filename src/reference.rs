@@ -1,7 +1,7 @@
-//! A straight-line statement of what the reservation table computes for one
-//! sample, using the same word widths and the same product scaling as the
-//! datapath but none of its muxes, latches or pipeline. The datapath tests
-//! check the cycle-level emulator against this.
+//! A straight-line statement of what the microcode computes for one sample,
+//! using the same word widths and the same product scaling as the datapath
+//! but none of its muxes, latches or pipeline. The datapath tests check the
+//! cycle-level emulator against this.
 
 use crate::bits::{sat, wrap};
 use crate::coef::BlockFloat;
@@ -16,25 +16,27 @@ pub struct RefOut {
     pub out: i64,
 }
 
-/// `coefs` are [B2', B1', A2', A1'] as the decoder delivers them.
+/// `coefs` are [B2', B1', A2', A1', G] as the decoder delivers them; the
+/// gain is applied only when `with_gain`.
 pub fn reference_sample(
     p: &Params,
     dc: bool,
+    with_gain: bool,
     x: i64,
     z1: i64,
     z2: i64,
-    coefs: [BlockFloat; 4],
+    coefs: [BlockFloat; 5],
 ) -> RefOut {
     let mp = p.mult();
     let prod = |operand: i64, c: BlockFloat| scale_product(operand * c.mant as i64, c.exp, &mp);
-    let [b2, b1, a2, a1] = coefs;
+    let [b2, b1, a2, a1, g] = coefs;
 
     let x = wrap(x, p.input_bits.min(p.acc_bits)); // row 0: ACC 10 <- input
-    let g = if dc { x } else { 0 }; // "(SA = Xn) & DC"
+    let gx = if dc { x } else { 0 }; // "(SA = Xn) & DC"
 
     // rows 1, 2: multiplier operands
-    let op_b2 = p.operand(p.acc_fix(g - z2));
-    let op_b1 = p.operand(p.acc_fix(g - z1));
+    let op_b2 = p.operand(p.acc_fix(gx - z2));
+    let op_b1 = p.operand(p.acc_fix(gx - z1));
     // row 3
     let two_z1_minus_z2 = p.acc_fix(2 * z1 - z2);
     // row 4: -AR2 = b2'(op) + ((SA = Xn') & IDC) + IDC
@@ -45,7 +47,13 @@ pub fn reference_sample(
     let yn = p.acc_fix(two_z1_minus_z2 + ar);
     // rows 7, 8: -MA1 = a2'Z2 - AR; MAout = a1'Z1 + MA1
     let neg_ma1 = p.acc_fix(prod(p.operand(z2), a2) - ar);
-    let out = p.acc_fix(prod(p.operand(z1), a1) - neg_ma1);
+    let maout = p.acc_fix(prod(p.operand(z1), a1) - neg_ma1);
+    // rows 8g..11: g * MAout
+    let out = if with_gain {
+        p.acc_fix(prod(p.operand(maout), g))
+    } else {
+        maout
+    };
 
     RefOut {
         y_stored: sat(yn, p.delay_bits),

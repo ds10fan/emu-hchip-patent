@@ -111,6 +111,65 @@ The load now clamps to `min(input_bits, acc_bits)`. At 20 bits the measured
 responses are identical to 24 bits and the overflow counter stays at zero,
 as the 13 × 2^15 worst-case bound predicts.
 
+## 10. Two scalings for one code table
+
+VOICE_INTERFACE.md decodes an X byte as table/2^18 and an F byte as
+table/2^16; the first version of the emulator used 2^16 for every code, so
+its B2' and A2' were four times the chip's for the same code. The unit of a
+coefficient is now 2^-18 and each code has a role (X, F, gain) that sets
+its shift. Side effect: code 255 is 1.0 as X but 4.0 as F, so B1' can reach
+5.0 and the worst-case bounds were redone (same 13 × 2^15 at row 8).
+
+## 11. Fraction bits of an interpolated code were being truncated
+
+Codes interpolated by the cutoff carry fraction bits. The first fractional
+decoder truncated the expanded value to whole table units, which for a
+small f² (124.88 units at code 62.22) is a 0.8 % step, and the document's
+tables could not be reproduced. A block-floating decoder keeps the
+fraction in the mantissa and only moves the exponent, so `BlockFloat` got
+a signed exponent and the FIG. 7 shifter shifts further right. This is
+what "16-bit coefficients" with an 8-bit code suggests anyway: four code
+bits, a hidden bit and eight fraction bits of mantissa.
+
+## 12. The gain has no place in the eight rows
+
+With flag 0x40 word 9 is a gain, and no choice of the row 7 and 8 operands
+produces g·Yn: those rows add A2'Z2 and A1'Z1 to AR, and the AR term
+cannot be scaled from Z1 and Z2. The gain is three extra rows on the same
+datapath (MAout into LATCH 18 from the adder output, product back through
+MUX 15 with input 17 gated off). It may well live elsewhere in the chip;
+using the voice's own multiplier is the reading that keeps the design in
+one place.
+
+## 13. The neutral word is not transparent at 16 operand bits
+
+A DC-on section with B2' = 1, B1' = 2 computes Yn = X exactly, but its
+multiplier operands are X − Z2 and X − Z1, and a jump from −20000 to 32767
+makes X − Z1 = 52767, which a 16-bit LATCH 18 clips. The firmware fills
+unused sections with this word, so the real chip either has a wider
+operand latch or does not pass full-scale transients cleanly. The same
+mechanism makes resonant DC-on sections clip at (1 + peak gain) times the
+input amplitude. The voice tests run with 18 bits and a separate test pins
+the 16-bit behaviour.
+
+## 14. Low cutoffs and sub-LSB products
+
+At the 2-pole lowpass's cutoff 0 (84 Hz, Q 3.35) the DC-on correction
+products are a fraction of an LSB, floor truncation biases them, and the
+response is 0.25 dB low at 50 Hz. Rounding halves it; operand and
+accumulator widths change nothing. Left as is and tolerated in the test;
+whether the chip keeps fraction bits in the product is unknown.
+
+## 15. Measuring a voice without saturating it
+
+The sine amplitude has to be planned from the largest signal at any delay
+memory, not from the voice's output: the 6-pole lowpass peaks at 22 dB
+inside and the gain word must not be counted (the delay holds Yn before
+the gain). Points where the ideal output is under 100 LSB are at the
+quantisation floor (the 6-pole at 5 kHz is −78 dB on a 2340 input) and are
+skipped; the 4th-order highpass below 200 Hz is pure noise because its
+attenuating zeros come before its amplifying unnormalised poles.
+
 ## Smaller notes
 
 - MUX 16 needs a zero for the "& DC" and "& IDC" terms; nothing in the

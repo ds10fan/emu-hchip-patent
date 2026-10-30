@@ -59,8 +59,9 @@ products appear on `prod` three cycles after their operand was latched.
 
 ## 1 kHz, Q = 0.707, DC off (`hfilter response --fc 1000`)
 
-Decoded B2' = 0.171875, B1' = 0.1875; poles R = 0.910, 695 Hz; DC gain 64
-(36.1 dB). Impulse 2048, sine 468 (scaled by the DC gain).
+Decoded B2' = 0.171875 (5632·2^3 units of 2^-18), B1' = 0.1875; poles
+R = 0.910, 695 Hz; DC gain 64 (36.1 dB). Impulse 2048, sine 468 (scaled by
+the DC gain).
 
 | f [Hz] | ideal dB | DFT dB | err | sine dB | err |
 |---|---|---|---|---|---|
@@ -158,6 +159,16 @@ within 0.5 dB over most of the band. The impulse DFT is unusable above
 content. With the 6-bit coefficient mantissa the same section had B1' = B2'
 and a pole at z = 1 (`six_bit_mantissa_loses_the_difference`).
 
+## The voice: zeros, gain, stock filter types
+
+`tests/voice.rs` and VOICE.md: the decoded words reproduce the tables of
+VOICE_INTERFACE.md (coefficients to 1 part in 4000, the 1/256 code
+quantisation; f0 and Q to 0.3 % and 0.02), the neutral voice is
+transparent (at 18 operand bits), the gain word scales the output by
+table/2^18, and the 2-pole, 6-pole and 4th-order-highpass voices match
+their ideal responses within 0.25 dB wherever the output exceeds 100 LSB,
+0.5 dB at the 2-pole's cutoff 0.
+
 ## Lowpass properties (`it_is_a_lowpass`)
 
 For both DC modes at 1 kHz: the gain falls by more than 6 dB per octave at
@@ -170,10 +181,13 @@ Nyquist); the 20 Hz gain equals the DC gain of the form (0 dB or
 
 ```
 bits::tests::wrap_and_sat
-coef::tests::{decode_matches_formula, decode_is_monotonic_and_ends_at_four,
-              encode_round_trips, six_bit_mantissa_is_exact, first_is_second_plus_difference}
+coef::tests::{decode_code_matches_table, table_is_monotonic_and_ends_at_2_pow_18,
+              fraction_interpolates_linearly_between_codes, encode_round_trips,
+              roles_scale_as_documented, fraction_bits_survive_in_the_mantissa,
+              sixteen_bit_mantissa_is_exact_for_single_codes}
 mult::tests::{unity_and_two_are_exact, latency_is_three_cycles}
 datapath: matches_reference_default_widths
+          matches_reference_with_gain_rows
           matches_reference_with_saturating_accumulator_and_rounding
           matches_reference_with_narrow_words
           matches_reference_with_wrapping_operand_and_exact_coef_sum
@@ -190,6 +204,15 @@ lowpass:  lowpass_1khz_dc_off_matches_ideal
           dc_off_full_scale_saturates_but_stays_bounded
           dc_on_operand_clips_at_16_bits
           six_bit_mantissa_loses_the_difference
+voice:    word_table_matches_document_lp2_q64
+          word_table_matches_document_hp4_q64
+          neutral_voice_is_transparent
+          neutral_word_clips_at_16_bits
+          lp2_q64_response_matches_ideal_at_three_cutoffs
+          lp2_is_a_lowpass_that_moves_with_the_cutoff
+          lp6_q64_response_matches_ideal
+          hp4_q64_response_matches_ideal_and_is_a_highpass
+          gain_word_scales_the_output
 ```
 
-All 25 pass (`cargo test --release`).
+All 37 pass (`cargo test --release`).

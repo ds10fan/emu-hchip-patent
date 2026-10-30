@@ -35,7 +35,7 @@ pub struct MultParams {
 
 /// Stage 36 + BARREL SHIFTER 37: scale a raw operand*mantissa product by
 /// the exponent and realign to the data's binary point.
-pub fn scale_product(raw: i64, exp: u32, p: &MultParams) -> i64 {
+pub fn scale_product(raw: i64, exp: i32, p: &MultParams) -> i64 {
     let shift = FRAC_BITS as i64 - exp as i64 - p.lsb_drop as i64;
     let v = if shift > 0 {
         match p.round {
@@ -61,7 +61,7 @@ pub struct Multiplier {
     /// LATCH 35: operand times mantissa.
     pub latch35: i64,
     /// LATCH 34: exponent travelling with LATCH 35.
-    pub latch34: u32,
+    pub latch34: i32,
     /// LATCH 38: the product.
     pub latch38: i64,
 }
@@ -88,7 +88,6 @@ impl Multiplier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coef::decode_code;
 
     fn p() -> MultParams {
         MultParams {
@@ -101,8 +100,10 @@ mod tests {
 
     #[test]
     fn unity_and_two_are_exact() {
-        let one = decode_code(207);
-        let two = decode_code(223);
+        use crate::coef::{Decoder, Role, CODE_ONE_F, CODE_ONE_X};
+        let mut dec = Decoder::new(16, false);
+        let one = dec.decode((CODE_ONE_X as u16) << 8, Role::Second);
+        let two = dec.decode((CODE_ONE_F as u16) << 8, Role::First);
         for v in [-32768i64, -1, 0, 1, 12345, 32767] {
             assert_eq!(scale_product(v * one.mant as i64, one.exp, &p()), v);
             assert_eq!(scale_product(v * two.mant as i64, two.exp, &p()), 2 * v);
@@ -112,7 +113,7 @@ mod tests {
     #[test]
     fn latency_is_three_cycles() {
         let mut m = Multiplier::default();
-        let one = decode_code(207);
+        let one = BlockFloat::from_linear(1 << FRAC_BITS, 16);
         m.clock(Some((1000, one)), &p()); // end of cycle 1
         m.clock(None, &p()); // end of cycle 2
         assert_ne!(m.product(), 1000);

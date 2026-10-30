@@ -31,11 +31,11 @@ fn check(p: Params, dc: bool, seed: u64, samples: usize, input_range: i64) {
         rng.range(0, 255) as u8,
         rng.range(0, 255) as u8,
     );
-    let coefs: [BlockFloat; 4] = s.effective_coefs();
+    let coefs: [BlockFloat; 5] = s.effective_coefs();
     for n in 0..samples {
         let x = rng.range(-input_range, input_range);
         let (z1, z2) = (s.dmem[0], s.dmem[1]);
-        let want: RefOut = reference_sample(&p, dc, x, z1, z2, coefs);
+        let want: RefOut = reference_sample(&p, dc, s.with_gain, x, z1, z2, coefs);
         let out = s.process(x);
         assert_eq!(
             out, want.out,
@@ -45,6 +45,34 @@ fn check(p: Params, dc: bool, seed: u64, samples: usize, input_range: i64) {
             s.dmem[0], want.y_stored,
             "stored Yn differs at sample {n} (dc={dc}, seed={seed})"
         );
+    }
+}
+
+#[test]
+fn matches_reference_with_gain_rows() {
+    for seed in 1..20u64 {
+        for dc in [false, true] {
+            let mut rng = Rng(seed | 1);
+            let p = Params::default();
+            let mut s = Section::new(p);
+            s.dc = dc;
+            s.set_codes(
+                rng.range(0, 255) as u8,
+                rng.range(0, 255) as u8,
+                rng.range(0, 255) as u8,
+                rng.range(0, 255) as u8,
+            );
+            s.set_gain_q8(rng.range(0, 0xFFFF) as u16);
+            let coefs = s.effective_coefs();
+            for _ in 0..300 {
+                let x = rng.range(-(1 << 15), 1 << 15);
+                let (z1, z2) = (s.dmem[0], s.dmem[1]);
+                let want = reference_sample(&p, dc, true, x, z1, z2, coefs);
+                let out = s.process(x);
+                assert_eq!(out, want.out, "dc={dc} seed={seed}");
+                assert_eq!(s.dmem[0], want.y_stored);
+            }
+        }
     }
 }
 
@@ -142,11 +170,11 @@ fn first_sample_of_impulse() {
 }
 
 /// Worst-case bus values for a single section with 16-bit inputs and
-/// delays: the widest intermediate is MAout in cycle 8, bounded by
-/// |x| + (2 + B1' + A1') |Z1| + (1 + B2' + A2') |Z2| <= 2^15 (1 + 6 + 3) = 10 * 2^15 for
-/// pure-pole coefficients, and 13 * 2^15 with the FIR coefficients at their
-/// maxima. Either way 20 bits hold it; this drives the section with
-/// adversarial values and checks the bound and the counters.
+/// delays. With B2', A2' <= 1 and B1', A1' <= 5 (code 255 in each role) the
+/// rows are bounded, in units of 2^15, by 3 (row 3), 2 (row 4), 7 (row 5),
+/// 10 (row 6), 8 (row 7) and 13 (row 8), so 20 bits hold everything. This
+/// drives the section with adversarial values and checks the bound; the
+/// random drive reaches the row-5 bound of 7.
 #[test]
 fn single_section_worst_case_fits_in_20_bits() {
     use hchip_filter::microcode::MICROCODE;
@@ -181,5 +209,5 @@ fn single_section_worst_case_fits_in_20_bits() {
         worst as f64 / 32768.0
     );
     assert!(worst < 1 << 19, "{worst} needs more than 20 bits");
-    assert!(worst > 9 << 15, "adversarial drive too weak: {worst}");
+    assert!(worst > 6 << 15, "adversarial drive too weak: {worst}");
 }

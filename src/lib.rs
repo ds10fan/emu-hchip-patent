@@ -10,8 +10,10 @@ pub mod microcode;
 pub mod mult;
 pub mod reference;
 pub mod section;
+pub mod voice;
 
 pub use section::{Params, Section};
+pub use voice::Voice;
 
 /// Impulse response of `n` samples for an impulse of height `amp`.
 pub fn impulse_response(s: &mut Section, amp: i64, n: usize) -> Vec<i64> {

@@ -73,21 +73,44 @@ pub fn pole_rt(b1: f64, b2: f64) -> (f64, f64) {
     (r, (-b1 / (2.0 * r)).acos())
 }
 
-/// Magnitude response of the section at angular frequency `w` for the
-/// effective coefficients [B2', B1', A2', A1'] and the DC mode bit.
+/// Frequency response of one section at angular frequency `w` for the
+/// effective coefficients [B2', B1', A2', A1', G], the DC mode bit and
+/// whether the gain rows run.
 ///
 /// H(z) = g * (1 + (A1'-2) z^-1 + (1-A2') z^-2) / (1 + (B1'-2) z^-1 + (1-B2') z^-2),
-/// g = B1' - B2' when dc, else 1.
-pub fn ideal_response(coefs: [f64; 4], dc: bool, w: f64) -> Complex {
-    let [b2p, b1p, a2p, a1p] = coefs;
+/// g = (B1' - B2') when dc, else 1; times G when with_gain.
+pub fn ideal_response(coefs: [f64; 5], dc: bool, with_gain: bool, w: f64) -> Complex {
+    let [b2p, b1p, a2p, a1p, gain] = coefs;
     let z1 = Complex::expj(-w);
     let z2 = Complex::expj(-2.0 * w);
     let num = Complex::new(1.0, 0.0) + z1.scale(a1p - 2.0) + z2.scale(1.0 - a2p);
     let den = Complex::new(1.0, 0.0) + z1.scale(b1p - 2.0) + z2.scale(1.0 - b2p);
-    let g = if dc { b1p - b2p } else { 1.0 };
+    let g = if dc { b1p - b2p } else { 1.0 } * if with_gain { gain } else { 1.0 };
     let d2 = den.re * den.re + den.im * den.im;
     let inv = Complex::new(den.re / d2, -den.im / d2);
     (num * inv).scale(g)
+}
+
+/// Natural frequency (Hz) and Q of the root pair of z^2 + b1 z + b2 at
+/// sample rate `fs`, via s = fs ln z: f0 = |s| / 2 pi, Q = |s| / (-2 Re s).
+/// For a real pair the geometric mean of the two roots is used.
+pub fn pole_fq(b1: f64, b2: f64, fs: f64) -> (f64, f64) {
+    let disc = b1 * b1 - 4.0 * b2;
+    if disc < 0.0 {
+        let re = -b1 / 2.0;
+        let im = (-disc).sqrt() / 2.0;
+        let s_re = fs * re.hypot(im).ln();
+        let s_im = fs * im.atan2(re);
+        let mag = s_re.hypot(s_im);
+        (mag / (2.0 * PI), mag / (-2.0 * s_re))
+    } else {
+        let r1 = (-b1 + disc.sqrt()) / 2.0;
+        let r2 = (-b1 - disc.sqrt()) / 2.0;
+        let s1 = fs * r1.abs().ln();
+        let s2 = fs * r2.abs().ln();
+        let mag = (s1 * s2).abs().sqrt();
+        (mag / (2.0 * PI), mag / (-(s1 + s2)))
+    }
 }
 
 /// DFT of a real sequence at angular frequency `w`.

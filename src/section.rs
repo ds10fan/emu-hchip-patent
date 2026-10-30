@@ -6,8 +6,8 @@
 //! memory). `Section::process` runs the microcode for one sample.
 
 use crate::bits::{not, overflows, sat, wrap};
-use crate::coef::{encode_f64, BlockFloat, CoefKind, Decoder};
-use crate::microcode::MICROCODE;
+use crate::coef::{encode_f64, BlockFloat, Decoder, Role, CODE_ONE_F, CODE_ONE_X};
+use crate::microcode::{MICROCODE, MICROCODE_GAIN};
 use crate::mult::{MultParams, Multiplier, Rounding};
 
 /// Word widths and overflow behaviour. None of these are in the patent; see
@@ -118,6 +118,8 @@ pub enum Gate {
     Always,
     Dc,
     Idc,
+    /// Input 17 forced to zero unconditionally (gain rows).
+    Never,
 }
 
 /// The "Adder CD" column.
@@ -151,20 +153,23 @@ pub enum MuxM {
     Z1,
 }
 
-/// Coefficient memory slot. B1 and A1 hold difference codes (FIG. 8).
+/// Coefficient memory slot. B1 and A1 hold difference codes (FIG. 8); G is
+/// the output gain used by the gain rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Coef {
     B2 = 0,
     B1 = 1,
     A2 = 2,
     A1 = 3,
+    G = 4,
 }
 
 impl Coef {
-    pub fn kind(self) -> CoefKind {
+    pub fn role(self) -> Role {
         match self {
-            Coef::B2 | Coef::A2 => CoefKind::Second,
-            Coef::B1 | Coef::A1 => CoefKind::First,
+            Coef::B2 | Coef::A2 => Role::Second,
+            Coef::B1 | Coef::A1 => Role::First,
+            Coef::G => Role::Gain,
         }
     }
 }
@@ -230,8 +235,11 @@ pub struct Section {
     pub latch20: i64,
     /// DELAY MEMORY 22 words for this section: [Y[n-1], Y[n-2]].
     pub dmem: [i64; 2],
-    /// COEF. MEMORY 23: codes for B2', B1'-B2', A2', A1'-A2'.
-    pub coef_mem: [u8; 4],
+    /// COEF. MEMORY 23: codes with 8 fraction bits for B2', B1'-B2', A2',
+    /// A1'-A2' and the gain.
+    pub coef_mem: [u16; 5],
+    /// Run the gain rows after row 8 (`MICROCODE_GAIN`).
+    pub with_gain: bool,
     pub decoder: Decoder,
     pub mult: Multiplier,
     pub stats: Stats,
@@ -248,7 +256,14 @@ impl Section {
             latch13: 0,
             latch20: 0,
             dmem: [0; 2],
-            coef_mem: [0; 4],
+            coef_mem: [
+                (CODE_ONE_X as u16) << 8,
+                (CODE_ONE_F as u16) << 8,
+                (CODE_ONE_X as u16) << 8,
+                (CODE_ONE_F as u16) << 8,
+                (CODE_ONE_X as u16) << 8,
+            ],
+            with_gain: false,
             decoder: Decoder::new(p.mant_bits, p.exact_coef_sum),
             mult: Multiplier::default(),
             stats: Stats::default(),
@@ -268,33 +283,71 @@ impl Section {
         self.stats = Stats::default();
     }
 
-    /// Load raw codes: B2', the B1' difference, A2', the A1' difference.
+    /// Load integer codes: B2' (X), the B1' difference (F), A2', the A1'
+    /// difference. The gain code is left alone.
     pub fn set_codes(&mut self, b2: u8, b1_diff: u8, a2: u8, a1_diff: u8) {
-        self.coef_mem = [b2, b1_diff, a2, a1_diff];
+        self.coef_mem[0] = (b2 as u16) << 8;
+        self.coef_mem[1] = (b1_diff as u16) << 8;
+        self.coef_mem[2] = (a2 as u16) << 8;
+        self.coef_mem[3] = (a1_diff as u16) << 8;
+    }
+
+    /// Load codes with 8 fraction bits (interpolated codes).
+    pub fn set_codes_q8(&mut self, b2: u16, b1_diff: u16, a2: u16, a1_diff: u16) {
+        self.coef_mem[0] = b2;
+        self.coef_mem[1] = b1_diff;
+        self.coef_mem[2] = a2;
+        self.coef_mem[3] = a1_diff;
+    }
+
+    /// Load the gain code (8 fraction bits) and enable the gain rows.
+    pub fn set_gain_q8(&mut self, g: u16) {
+        self.coef_mem[4] = g;
+        self.with_gain = true;
     }
 
     /// Encode real coefficients (nearest code). `b1p` and `a1p` are the
     /// full first coefficients; their differences to `b2p`/`a2p` are stored.
     pub fn set_coefs(&mut self, b2p: f64, b1p: f64, a2p: f64, a1p: f64) {
         self.set_codes(
-            encode_f64(b2p),
-            encode_f64(b1p - b2p),
-            encode_f64(a2p),
-            encode_f64(a1p - a2p),
+            encode_f64(b2p, Role::Second),
+            encode_f64(b1p - b2p, Role::First),
+            encode_f64(a2p, Role::Second),
+            encode_f64(a1p - a2p, Role::First),
         );
     }
 
     /// The coefficients the multiplier will actually see, in microcode
-    /// order: [B2', B1', A2', A1'].
-    pub fn effective_coefs(&self) -> [BlockFloat; 4] {
+    /// order: [B2', B1', A2', A1', G].
+    pub fn effective_coefs(&self) -> [BlockFloat; 5] {
         let mut d = Decoder::new(self.p.mant_bits, self.p.exact_coef_sum);
-        [Coef::B2, Coef::B1, Coef::A2, Coef::A1]
-            .map(|c| d.decode(self.coef_mem[c as usize], c.kind()))
+        [Coef::B2, Coef::B1, Coef::A2, Coef::A1, Coef::G]
+            .map(|c| d.decode(self.coef_mem[c as usize], c.role()))
     }
 
     /// Same, as real numbers.
-    pub fn effective_coefs_f64(&self) -> [f64; 4] {
+    pub fn effective_coefs_f64(&self) -> [f64; 5] {
         self.effective_coefs().map(|c| c.to_f64())
+    }
+
+    /// Frequency response of this section as configured (effective
+    /// coefficients, DC mode, gain rows).
+    pub fn ideal_response(&self, w: f64) -> crate::design::Complex {
+        self.response(w, self.with_gain)
+    }
+
+    /// Frequency response with the gain rows included or not.
+    pub fn response(&self, w: f64, with_gain: bool) -> crate::design::Complex {
+        crate::design::ideal_response(self.effective_coefs_f64(), self.dc, with_gain, w)
+    }
+
+    /// The program this section runs per sample.
+    pub fn program(&self) -> &'static [Ctl] {
+        if self.with_gain {
+            &MICROCODE_GAIN[..]
+        } else {
+            &MICROCODE[..]
+        }
     }
 
     /// Execute one control word.
@@ -320,6 +373,7 @@ impl Section {
             Gate::Always => true,
             Gate::Dc => self.dc,
             Gate::Idc => !self.dc,
+            Gate::Never => false,
         };
         let a17 = if pass { m16 } else { 0 };
         let cin = match ctl.cin {
@@ -360,7 +414,7 @@ impl Section {
             if operand != mm >> p.mult_lsb_drop {
                 self.stats.mult_in_sat += 1;
             }
-            let coef = self.decoder.decode(self.coef_mem[c as usize], c.kind());
+            let coef = self.decoder.decode(self.coef_mem[c as usize], c.role());
             (operand, coef)
         });
         let full_product = crate::mult::scale_product(
@@ -405,7 +459,7 @@ impl Section {
     /// output (ACC 10 after the last cycle).
     pub fn process(&mut self, x: i64) -> i64 {
         self.input = x;
-        for ctl in MICROCODE.iter() {
+        for ctl in self.program() {
             self.step(ctl);
         }
         self.acc10
@@ -414,7 +468,7 @@ impl Section {
     /// Like `process`, but returns the per-cycle traces too.
     pub fn process_traced(&mut self, x: i64) -> (i64, Vec<Trace>) {
         self.input = x;
-        let traces = MICROCODE.iter().map(|ctl| self.step(ctl)).collect();
+        let traces = self.program().iter().map(|ctl| self.step(ctl)).collect();
         (self.acc10, traces)
     }
 }

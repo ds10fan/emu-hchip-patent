@@ -4,7 +4,8 @@
 use hchip_filter::coef::{decode_code, decode_linear};
 use hchip_filter::design::{db, dft, ideal_response, lowpass_poles, pole_rt, primes, unprimes};
 use hchip_filter::mult::Rounding;
-use hchip_filter::{impulse_response, microcode, sine_gain, Params, Section};
+use hchip_filter::voice::{stock_type, word_info, FLAG_GAIN, FLAG_UNNORMALISED};
+use hchip_filter::{impulse_response, microcode, sine_gain, Params, Section, Voice};
 use std::f64::consts::PI;
 
 const FS: f64 = 48000.0;
@@ -23,7 +24,9 @@ fn usage() -> ! {
   impulse  [--dc] [--fc HZ] [--q Q] [--amp A] [--n N]
                                  dump the impulse response as CSV
   sine     [--dc] [--fc HZ] [--q Q] [--f HZ] [--sine-amp A]
-                                 gain of one sine with the saturation counters"
+                                 gain of one sine with the saturation counters
+  voice    --type lp2|lp6|hp4 [--vq 0|64|127] --cutoff N   or   --words W0,..,W9 --flags F --cutoff N
+                                 decode the words of one voice and measure its response"
     );
     std::process::exit(2)
 }
@@ -38,6 +41,11 @@ struct Opts {
     x: i64,
     samples: usize,
     f: f64,
+    vtype: String,
+    vq: u8,
+    cutoff: u8,
+    words: Option<[u32; 10]>,
+    flags: u8,
     params: Params,
 }
 
@@ -52,6 +60,11 @@ fn parse(args: &[String]) -> Opts {
         x: 10000,
         samples: 2,
         f: 1000.0,
+        vtype: "lp2".into(),
+        vq: 64,
+        cutoff: 128,
+        words: None,
+        flags: 0x40,
         params: Params::default(),
     };
     let mut i = 0;
@@ -71,6 +84,27 @@ fn parse(args: &[String]) -> Opts {
             "--n" => o.n = val(&mut i).parse().unwrap_or_else(|_| usage()),
             "--x" => o.x = val(&mut i).parse().unwrap_or_else(|_| usage()),
             "--f" => o.f = val(&mut i).parse().unwrap_or_else(|_| usage()),
+            "--type" => o.vtype = val(&mut i).to_string(),
+            "--vq" => o.vq = val(&mut i).parse().unwrap_or_else(|_| usage()),
+            "--cutoff" => o.cutoff = val(&mut i).parse().unwrap_or_else(|_| usage()),
+            "--flags" => {
+                let v = val(&mut i);
+                o.flags =
+                    u8::from_str_radix(v.trim_start_matches("0x"), 16).unwrap_or_else(|_| usage());
+            }
+            "--words" => {
+                let v: Vec<u32> = val(&mut i)
+                    .split(',')
+                    .map(|w| {
+                        u32::from_str_radix(w.trim_start_matches("0x"), 16)
+                            .unwrap_or_else(|_| usage())
+                    })
+                    .collect();
+                if v.len() != 10 {
+                    usage();
+                }
+                o.words = Some(v.try_into().unwrap());
+            }
             "--samples" => o.samples = val(&mut i).parse().unwrap_or_else(|_| usage()),
             "--acc-sat" => o.params.acc_saturate = true,
             "--round" => o.params.product_round = Rounding::Nearest,
@@ -122,8 +156,8 @@ fn print_design(o: &Opts, s: &Section) {
     println!(
         "poles:   R = {r:.6}  theta = {th:.6} rad = {:.1} Hz;  DC gain = {:.3} ({:.2} dB)",
         th * FS / (2.0 * PI),
-        ideal_response(effv, o.dc, 0.0).abs(),
-        db(ideal_response(effv, o.dc, 0.0).abs())
+        ideal_response(effv, o.dc, false, 0.0).abs(),
+        db(ideal_response(effv, o.dc, false, 0.0).abs())
     );
     println!("params:  {:?}", s.p);
 }
@@ -133,7 +167,12 @@ fn main() {
     let Some(cmd) = args.first() else { usage() };
     let o = parse(&args[1..]);
     match cmd.as_str() {
-        "microcode" => print!("{}", microcode::table()),
+        "microcode" => {
+            println!("section (MICROCODE):");
+            print!("{}", microcode::table());
+            println!("\nsection with output gain (MICROCODE_GAIN):");
+            print!("{}", microcode::table_of(&microcode::MICROCODE_GAIN));
+        }
         "coefs" => {
             println!("code  c  mant exp   linear   value");
             for code in 0..=255u8 {
@@ -202,7 +241,7 @@ fn main() {
             // Keep the sine below the delay memory's range at the loudest point
             // of the ideal response (the measurement must not saturate).
             let max_gain = (0..=2400)
-                .map(|k| ideal_response(eff, o.dc, PI * k as f64 / 2400.0).abs())
+                .map(|k| ideal_response(eff, o.dc, false, PI * k as f64 / 2400.0).abs())
                 .fold(1.0f64, f64::max);
             let sine_amp = if o.sine_amp > 0 {
                 o.sine_amp as f64
@@ -213,7 +252,7 @@ fn main() {
             let mut sine_stats = Default::default();
             for f in freqs {
                 let w = 2.0 * PI * f / FS;
-                let ideal = db(ideal_response(eff, o.dc, w).abs());
+                let ideal = db(ideal_response(eff, o.dc, false, w).abs());
                 let meas = db(dft(&h, w).abs() / o.amp as f64);
                 let mut s2 = design(&o);
                 let g = sine_gain(&mut s2, f, FS, sine_amp, 4096, 8192);
@@ -238,9 +277,102 @@ fn main() {
                 "f = {} Hz, amp = {amp}: measured {:.2} dB, ideal {:.2} dB, stats = {:?}",
                 o.f,
                 db(g),
-                db(ideal_response(eff, o.dc, w).abs()),
+                db(ideal_response(eff, o.dc, false, w).abs()),
                 s.stats
             );
+        }
+        "voice" => {
+            let (words, flags) = match o.words {
+                Some(w) => (w, o.flags),
+                None => stock_type(&o.vtype, o.vq).unwrap_or_else(|| {
+                    eprintln!("unknown stock type {} at Q {}", o.vtype, o.vq);
+                    std::process::exit(2)
+                }),
+            };
+            let mut v = Voice::new(o.params);
+            v.set(words, o.cutoff, flags);
+            println!(
+                "voice: words {:08X?}, cutoff {}, flags 0x{:02X} (gain word {}, unnormalised {})",
+                words,
+                o.cutoff,
+                flags,
+                flags & FLAG_GAIN != 0,
+                flags & FLAG_UNNORMALISED != 0
+            );
+            println!(
+                "{:>4} {:>8} {:>8} {:>10} {:>10} {:>9} {:>7}  role",
+                "word", "X code", "F code", "B2'", "f^2", "f0 [Hz]", "Q"
+            );
+            for (i, w) in words.iter().enumerate() {
+                let role = match i {
+                    0 | 4 | 8 => "pole",
+                    1 | 5 => "zero",
+                    9 if flags & FLAG_GAIN != 0 => "gain",
+                    9 => "zero",
+                    _ => "unused",
+                };
+                if role == "unused" {
+                    continue;
+                }
+                let info = word_info(*w, o.cutoff, FS);
+                if role == "gain" {
+                    let g = v.sections[2].effective_coefs_f64()[4];
+                    println!(
+                        "{i:>4} {:>8} {:>8.2} {:>10} {:>10} {:>9} {:>7}  gain = {g:.4} ({:.2} dB)",
+                        "-",
+                        info.f_code,
+                        "-",
+                        "-",
+                        "-",
+                        "-",
+                        db(g)
+                    );
+                } else {
+                    println!(
+                        "{i:>4} {:>8.2} {:>8.2} {:>10.6} {:>10.6} {:>9.1} {:>7.2}  {role}",
+                        info.x_code, info.f_code, info.b2p, info.f2, info.f0, info.q
+                    );
+                }
+            }
+            for (k, s) in v.sections.iter().enumerate() {
+                let e = s.effective_coefs_f64();
+                println!(
+                    "section {k}: dc = {}, B2' = {:.6}, B1' = {:.6}, A2' = {:.6}, A1' = {:.6}, gain rows = {}, {} cycles",
+                    s.dc, e[0], e[1], e[2], e[3], s.with_gain, s.program().len()
+                );
+            }
+            let max_gain = v.max_internal_gain().max(1e-9);
+            let amp = (30000.0 / max_gain).floor().min(30000.0);
+            println!(
+                "cycles per sample: {}; sine amp {amp} (max internal gain {max_gain:.3})",
+                v.cycles_per_sample()
+            );
+            println!(
+                "{:>8} {:>10} {:>10} {:>8}",
+                "f [Hz]", "ideal dB", "sine dB", "err"
+            );
+            let freqs = [
+                20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0,
+            ];
+            for f in freqs {
+                let w = 2.0 * PI * f / FS;
+                let ideal = db(v.ideal_response(w).abs());
+                let mut v2 = v.clone();
+                v2.reset_state();
+                let g = {
+                    let mut acc = hchip_filter::design::Complex::new(0.0, 0.0);
+                    let (settle, n) = (4096usize, 8192usize);
+                    for i in 0..settle + n {
+                        let x = (amp * (w * i as f64).sin()).round() as i64;
+                        let y = v2.process(x) as f64;
+                        if i >= settle {
+                            acc = acc + hchip_filter::design::Complex::expj(-w * i as f64).scale(y);
+                        }
+                    }
+                    acc.abs() / (amp * n as f64 / 2.0)
+                };
+                println!("{f:8.0} {ideal:10.2} {:10.2} {:8.2}", db(g), db(g) - ideal);
+            }
         }
         "impulse" => {
             let mut s = design(&o);

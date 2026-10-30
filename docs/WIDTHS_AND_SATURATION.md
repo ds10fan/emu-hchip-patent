@@ -55,22 +55,23 @@ see "Dynamic range of the DC-off form" below.
 ## Accumulators and adder: 24 bits, wrapping (`acc_bits = 24`, `acc_saturate = false`)
 
 Bounds for one section with |Xn|, |Z1|, |Z2| ≤ 2^15 and the coefficients at
-their maxima (B1', A1' ≤ 4; B2', A2' ≤ 2), in units of 2^15:
+their maxima (B2', A2' ≤ 1 from an X code; B1', A1' ≤ 1 + 4 from an F
+code), in units of 2^15:
 
 | Row | Value | Bound |
 |---|---|---|
 | 3 | 2Z1 − Z2 | 3 |
-| 4 | −AR2 = ±Xn + B2' Z2 | 3 |
+| 4 | −AR2 = ±Xn + B2' Z2 | 2 |
 | 5 | AR = AR2 + B1' Z1 | 7 |
 | 6 | Yn = AR + 2Z1 − Z2 | 10 |
-| 7 | −MA1 = A2' Z2 − AR | 9 |
+| 7 | −MA1 = A2' Z2 − AR | 8 |
 | 8 | MAout = MA1 + A1' Z1 | 13 |
 
-An adversarial run (`single_section_worst_case_fits_in_20_bits`) reaches
-13.00 × 2^15 = 425972, so 20 bits are enough for one section fed with a
-16-bit-range input, and "input + delays does not saturate" holds with four
-bits of headroom. For the pure-pole coefficients used here (A1' = 2, A2' = 1)
-the bound is 10 × 2^15.
+So 20 bits are enough for one section fed with a 16-bit-range input, and
+"input + delays does not saturate" holds with four bits of headroom. An
+adversarial run (`single_section_worst_case_fits_in_20_bits`) reaches the
+row 5 bound of 7 × 2^15. For the pure-pole coefficients used in the
+lowpass tests (A1' = 2, A2' = 1) the row 8 bound is 10 × 2^15.
 
 The output of a section is not saturated and becomes the next section's
 input, so a chain can present up to 13 × 2^15 to the next adder; 24 bits
@@ -121,40 +122,56 @@ operand 8673 times in 12288 samples and reads +0.60 dB instead of −3.14 dB:
 | 18 bits | −3.14 dB | 0 |
 | 16 bits, sine 15000 | −3.14 dB | 0 |
 
-So either the real multiplier's signed input is at least one bit wider than
-the delay memory, or signals into a DC-on section are kept 6 dB below full
-scale, or the chip accepts this clipping (it distorts only the correction
-term B(Xn − Z), not the main path 2Z1 − Z2). The default keeps 16 bits with
-saturation and counts the clips in `mult_in_sat`; the lowpass tests that
-need a clean DC-on measurement use 18 bits. Saturating rather than wrapping
-at LATCH 18 is again the choice that keeps a wrong product bounded.
+The same clipping shows in two more places. The neutral word (B2' = 1,
+B1' = 2, a transparent DC-on section) is not transparent at 16 bits for a
+full-scale jump: −20000 followed by 32767 gives X − Z1 = 52767
+(`neutral_word_clips_at_16_bits`). And a resonant DC-on section near its
+peak has |X − Z| up to (1 + peak gain) times the input: the 2-pole lowpass
+at cutoff 255 (18 kHz, Q 2.5) reads 7 dB low at 20 kHz with a 5900 input
+at 16 bits and exactly right at 18.
 
-## Coefficient: 16-bit mantissa, small exponent (`mant_bits = 16`)
+So either the real multiplier's signed input is wider than the delay
+memory (17 bits covers the neutral word, 18 the resonances), or signals
+into a DC-on section are kept well below full scale, or the chip accepts
+this clipping (it distorts only the correction term B(Xn − Z), not the
+main path 2Z1 − Z2). The default keeps 16 bits with saturation and counts
+the clips in `mult_in_sat`; the tests that need a clean DC-on measurement
+use 18 bits. Saturating rather than wrapping at LATCH 18 is again the
+choice that keeps a wrong product bounded.
 
-The code table decodes to a linear value in units of 2^-16, from 1/65536
-(code 0) to exactly 4.0 (code 255), so one unit of coefficient is 2^16 and a
-coefficient below 1.0 is a 16-bit integer. B2' = 1 − B2 lies in [0, 2) and
-B1' = B1 + 2 in [0, 4), hence the two bits above 1.0.
+## Coefficient: 16-bit mantissa, signed exponent (`mant_bits = 16`)
 
-The code itself has a 5-bit mantissa (hidden bit plus four) and a 4-bit
-shift, and the first version of the emulator gave the multiplier a 6-bit
-mantissa, enough to hold any single decoded code exactly. That fails: the
-first coefficient is the second plus a decoded difference, and at 100 Hz the
-difference (11 units) against B2' (1216 units) is lost when the sum is
+The code table is one function used with two scalings
+(VOICE_INTERFACE.md): an X byte gives B2' (or A2') = table/2^18, an F byte
+gives the difference f² = B1' − B2' (or A1' − A2') = table/2^16. One unit of
+coefficient is therefore 2^-18 (`coef::FRAC_BITS`): B2' runs from 2^-18 to
+exactly 1.0 (code 255) and f² from 2^-16 to 4.0, so B1' can reach 5.0. The
+neutral word X = 0xFF, F = 0xCF is B2' = 1, B1' = 2.
+
+The first version of the emulator gave the multiplier a 6-bit mantissa,
+enough to hold any single decoded code exactly. That fails: the first
+coefficient is the second plus a decoded difference, and at 100 Hz the
+difference (44 units) against B2' (4864 units) is lost when the sum is
 renormalised to 6 bits. Then B1' = B2', 1 + B1 + B2 = 0, a pole sits on
 z = 1 and the DC-off section has infinite DC gain
 (`six_bit_mantissa_loses_the_difference`). The difference B1' − B2' ≈ 2θ²
 is what sets the pole frequency, which is why the patent encodes it
 separately (5:48-54) and why the abstract says 16-bit coefficients are
-adequate: at 20 Hz and 48 kHz the difference is 0.9 units, the edge of a
-16-bit coefficient.
+adequate.
 
-With a 16-bit mantissa the exponent is 0 for coefficients below 1.0 and 1 or
-2 above, so FIG. 7's "block floating point ... to achieve a greater range"
-reads as a 16-bit multiplier with a two-bit range extension, not as a short
-mantissa with a wide exponent. FIG. 8's aligned addition (shifters 52 and 53)
-then only loses bits when a coefficient is at or above 1.0; `exact_coef_sum`
-removes even that.
+A second thing the mantissa must carry is the fraction of an interpolated
+code. The voice interpolates codes in 1/256 steps; truncating the decoded
+value to whole table units would quantise a small f² in steps of 0.8 %
+(124.88 units at a 62.22 code became 124). The decoder therefore keeps the
+code's eight fraction bits in the mantissa and lets the exponent go
+negative (`BlockFloat.exp: i32`); the barrel shifter of FIG. 7 then shifts
+further right. With a 16-bit mantissa nothing is lost for a single code
+(13 to 15 bits), and the aligned addition of FIG. 8 only drops bits when
+the two exponents differ by more than the spare mantissa bits.
+
+So FIG. 7's "block floating point ... to achieve a greater range" reads as
+a 16-bit multiplier whose exponent runs from about −8 to +2, not as a short
+mantissa with a wide exponent.
 
 ## Product, LATCH 38: floor, saturating into the accumulator width
 
@@ -176,6 +193,19 @@ with DC off a residual r survives while ceil(B2' r) = ceil(B1' r), i.e. up to
 about 1/(B1' − B2') LSB, here 64. Round-to-nearest sustains a limit cycle at
 the resonance instead. Floor is the simpler hardware and the better
 behaviour, so it is the default.
+
+## Low cutoffs: sub-LSB products
+
+With a 16-bit signal path and products truncated to the signal LSB, the
+DC-on correction terms B(X − Z) at a low cutoff are smaller than one LSB:
+at the 2-pole lowpass's cutoff 0 (84 Hz, Q 3.35) a 50 Hz sine of 9000 LSB
+has |X − Z1| of about 60 LSB and B2'(X − Z) of 0.2 LSB. Floor truncation
+biases the recursion and the measured response is 0.25 dB low at 50 Hz;
+round-to-nearest halves that, and the operand or accumulator width changes
+nothing. A product with fraction bits below the signal LSB, or a wider
+signal path, would be needed to do better; whether the chip has either is
+unknown. The document's 0.02 dB agreement was measured on the stock types,
+presumably at moderate cutoffs.
 
 ## Dynamic range of the DC-off form
 
@@ -203,6 +233,6 @@ both; the DC bit selects.
 | `delay_bits` | 16, saturating | 14 to 18 |
 | `mult_in_bits` / `mult_in_saturate` | 16 / saturate | 17 or 18 for clean DC-on at full scale |
 | `mult_lsb_drop` | 0 | 2 is harmless, 4 degrades the stopband |
-| `mant_bits` | 16 | 6 fails at low cutoffs |
+| `mant_bits` | 16 | 6 fails at low cutoffs; the mantissa also carries 8 fraction bits of an interpolated code |
 | `exact_coef_sum` | false (aligned add) | |
 | `product_round` / `product_saturate` | Floor / saturate | Nearest produces limit cycles |

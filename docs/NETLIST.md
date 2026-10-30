@@ -57,7 +57,8 @@ MUX 16  (3:1)     in0 = Z1X2 (line 21)                             [drawn]
                   ctl: mux16, gate
                   gate: A17 is forced to zero when the reservation table says
                   "& DC" (cycles 1, 2) or "& IDC" (cycle 4) and the condition
-                  is false. No gate or zero input is drawn.         [assumed]
+                  is false, and in the gain rows. No gate or zero input is
+                  drawn.                                            [assumed]
 
 MUX10   (3:1)     in0 = IN   (INPUT SIGNAL)                        [drawn]
                   in1 = SUM  (adder output)                        [drawn]
@@ -98,7 +99,8 @@ MUXM    (3:1)     in0 = SUM  (long line along the top of the figure) [drawn]
 LATCH 18          D = MM                                           -> L18        [drawn]
                   ctl: load18
 COEF MEMORY 23                                                     -> CM         [drawn]
-                  ctl: coef (which of B2', B1', A2', A1')
+                  ctl: coef (which of B2', B1', A2', A1'; plus the gain G
+                  of the emulator's gain rows)
 LATCH 19          D = CM                                           -> L19        [drawn]
                   ctl: load18 (loaded together with LATCH 18)      [text 4:21-23]
 
