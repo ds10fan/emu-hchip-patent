@@ -169,6 +169,15 @@ table/2^18, and the 2-pole, 6-pole and 4th-order-highpass voices match
 their ideal responses within 0.25 dB wherever the output exceeds 100 LSB,
 0.5 dB at the 2-pole's cutoff 0.
 
+## The interpolator
+
+`tests/interp.rs` and INTERPOLATOR.md: Table I decodes as transcribed;
+the encoder reproduces every row of Table II at all eight approach times
+(1872 points); a sweep from cutoff 0 to 255 at 32 << 5 settles in 1041
+samples with the codes passing through the cutoff-128 values on the way
+and the final voice identical to the static cutoff-255 voice; retargeting
+mid-sweep arrives in the new approach time; x at rest is static.
+
 ## Lowpass properties (`it_is_a_lowpass`)
 
 For both DC modes at 1 kHz: the gain falls by more than 6 dB per octave at
@@ -204,6 +213,14 @@ lowpass:  lowpass_1khz_dc_off_matches_ideal
           dc_off_full_scale_saturates_but_stays_bounded
           dc_on_operand_clips_at_16_bits
           six_bit_mantissa_loses_the_difference
+interp:   interp::tests::{table_i_examples, lattice_is_distinct_and_encode_floors,
+                          update_reaches_the_clamp_and_stops, small_differences_use_the_forced_carry,
+                          overflow_selects_the_clamp}
+          table_ii_is_reproduced
+          approach_times_halve_the_increment
+          voice_sweeps_to_the_destination
+          retarget_mid_sweep
+          resting_x_is_static
 voice:    word_table_matches_document_lp2_q64
           word_table_matches_document_hp4_q64
           neutral_voice_is_transparent
@@ -215,4 +232,4 @@ voice:    word_table_matches_document_lp2_q64
           gain_word_scales_the_output
 ```
 
-All 37 pass (`cargo test --release`).
+All 47 pass (`cargo test --release`).

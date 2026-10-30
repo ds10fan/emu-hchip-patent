@@ -12,7 +12,10 @@ IIR audio filter", 1992), the filter block of the E-mu H-chip. It covers
 - the reservation table as microcode: eight control words plus a load state,
   and a variant with three gain rows;
 - a voice: three sections in series programmed from the E4's ten control
-  words, cutoff and flags (`VOICE_INTERFACE.md`).
+  words, cutoff and flags (`VOICE_INTERFACE.md`);
+- the interpolator of FIGs. 9 to 12: increment code (Table I), per-sample
+  update with clamp (FIG. 10), destination-and-approach-time encoder
+  (Table II, reproduced in full), driving cutoff sweeps.
 
 A section is a biquad in the patent's transformed form: rows 1 to 6 compute
 the poles, Yn = Xn + 2Z1 − Z2 − B1'Z1 + B2'Z2 (FIG. 3, or the unity-DC-gain
@@ -29,6 +32,7 @@ coefficient (table/2^18), F the difference to the first (table/2^16).
 | `docs/WIDTHS_AND_SATURATION.md` | word widths, saturation points, what was measured when they were varied |
 | `docs/VERIFICATION.md` | the lowpass verification: method, traces, measured responses |
 | `docs/VOICE.md` | zeros, gain and the voice: word mapping, the gain rows, measured stock filter types |
+| `docs/INTERPOLATOR.md` | the interpolating variable: Tables I and II, the update, sweeps |
 | `docs/PROBLEMS.md` | the problems met while building it and what was decided about each |
 | `VOICE_INTERFACE.md` | what one E4 voice computes, as measured, from its control words |
 | `PATENT_US5170369.md`, `patent_figs/` | transcription of the patent and crops of its figures |
@@ -43,6 +47,7 @@ src/mult.rs        FIG. 7 multiplier pipeline
 src/section.rs     FIG. 6 datapath, Params (widths), Ctl (control word), Section::step
 src/microcode.rs   the reservation table as control words, plus the gain rows
 src/voice.rs       the E4 voice: words, cutoff interpolation, flags, three sections
+src/interp.rs      the interpolating variable: increment code, update, encoder
 src/reference.rs   straight-line integer model of one sample, for the datapath tests
 src/design.rs      lowpass design, ideal response, DFT
 src/lib.rs         impulse_response, sine_gain
@@ -50,6 +55,7 @@ src/bin/hfilter.rs command line tool
 tests/datapath.rs  emulator vs. reference, pure-two-pole identity, worst-case bound
 tests/lowpass.rs   response measurements against the ideal response
 tests/voice.rs     the voice against VOICE_INTERFACE.md and its ideal response
+tests/interp.rs    Table II in full, sweeps and retargeting; table_ii_data.rs is Table II
 ```
 
 ## Use
@@ -63,6 +69,7 @@ cargo run --release -- response --dc --fc 1000 --q 10  # DC-on resonant
 cargo run --release -- sine --dc --f 1000 --sine-amp 30000 --mult-bits 17
 cargo run --release -- voice --type lp2 --vq 64 --cutoff 128   # a stock voice: decoded words, response
 cargo run --release -- voice --words 6A07E6E3,FFCFFFCF,FFCFFFCF,FFCFFFCF,FFCFFFCF,FFCFFFCF,FFCFFFCF,FFCFFFCF,FFCFFFCF,00F600FE --flags 40 --cutoff 64
+cargo run --release -- voice --type lp2 --vq 64 --cutoff 0 --sweep-to 255 --time 5   # a cutoff sweep
 cargo run --release -- coefs                           # code table
 cargo run --release -- impulse --dc --fc 1000 > h.csv
 ```
@@ -84,7 +91,8 @@ let y = s.process(x);                     // one sample, nine cycles
 use hchip_filter::Voice;
 let mut v = Voice::new(Params { mult_in_bits: 18, ..Params::default() });
 v.set(words, cutoff, 0x40);               // ten u32 words, cutoff 0..255, flags
-let y = v.process(x);                     // one sample, 30 cycles
+v.sweep_to(200, 5);                       // move the cutoff there in about 32 << 5 samples
+let y = v.process(x);                     // one sample, 30 cycles; x advances every sample
 ```
 
 ## Decisions not in the patent
@@ -104,3 +112,6 @@ let y = v.process(x);                     // one sample, 30 cycles
   k, product consumed in row k+3); the reservation table's "Prod" column is
   off by one for the A products and was not followed literally.
 - A load state (row 0) precedes the eight rows for a lone section.
+- One interpolating variable per voice; codes are interpolated with 8
+  fraction bits; the E4's mapping of its parameters to destination and
+  approach time is not known.

@@ -16,11 +16,15 @@
 //!
 //! The code interpolation C(x) = Ca + x(Cb − Ca) is done here in software;
 //! in the patent it is the coefficient math unit that precedes the decoder
-//! and uses the multiplier's free slots. The time behaviour of x (FIG. 10)
-//! is not modelled: the cutoff is a static value.
+//! and uses the multiplier's free slots. x is the voice's interpolating
+//! variable (`interp::Interpolator`), 16 bits, a cutoff byte duplicated
+//! (cutoff 255 = 0xFFFF). It is updated once per sample; `set` jumps it to
+//! the cutoff, `sweep_to` lets it move there at one of the eight approach
+//! times.
 
 use crate::coef::{decode_q8_f64, Role, CODE_ONE_F, CODE_ONE_X, FRAC_BITS};
 use crate::design::{pole_fq, Complex};
+use crate::interp::{dup, Interpolator};
 use crate::section::{Params, Section, Stats};
 
 /// X = 0xFF, F = 0xCF in both frames: B2' = 1, f² = 1, transparent in every role.
@@ -43,14 +47,18 @@ pub fn word_codes(word: u32) -> (u8, u8, u8, u8) {
     )
 }
 
-/// Interpolate a code between the two frames at `cutoff`, with 8 fraction
-/// bits: code = c0 + (c255 - c0) * cutoff / 255.
+/// C(x) = Ca + x (Cb − Ca) with x a 16-bit fraction of 65536, rounded to
+/// 8 fraction bits of a code. For a cutoff byte c, x = c * 0x0101, which
+/// makes this c0 + (c255 − c0) * c / 255 to within 1/65536 of a code.
+pub fn interp_x(c0: u8, c255: u8, x: u16) -> u16 {
+    let c0 = c0 as i32;
+    let c255 = c255 as i32;
+    ((c0 * 65536 + (c255 - c0) * x as i32 + 128) >> 8) as u16
+}
+
+/// The code at a static cutoff byte.
 pub fn interp_q8(c0: u8, c255: u8, cutoff: u8) -> u16 {
-    let c0 = c0 as i32 * 256;
-    let c255 = c255 as i32 * 256;
-    let d = (c255 - c0) * cutoff as i32;
-    // nearest 1/256 of a code
-    (c0 + (d + d.signum() * 127) / 255) as u16
+    interp_x(c0, c255, dup(cutoff))
 }
 
 /// What one word means at a cutoff, in the document's terms.
@@ -91,9 +99,14 @@ pub fn word_info(word: u32, cutoff: u8, fs: f64) -> WordInfo {
 pub struct Voice {
     pub p: Params,
     pub words: [u32; 10],
+    /// The programmed cutoff: the interpolator's clamp (destination).
     pub cutoff: u8,
     pub flags: u8,
     pub sections: [Section; 3],
+    /// The interpolating variable x, shared by all words of the voice.
+    pub interp: Interpolator,
+    /// x the sections' codes were last computed for.
+    applied_x: u16,
 }
 
 impl Voice {
@@ -104,58 +117,78 @@ impl Voice {
             cutoff: 0,
             flags: FLAG_GAIN,
             sections: [Section::new(p), Section::new(p), Section::new(p)],
+            interp: Interpolator::at(0),
+            applied_x: 0,
         };
         v.words[9] = 0x00FF_00FF;
         v.apply();
         v
     }
 
-    /// Program the voice. Coefficient memories are reloaded; the signal
-    /// state is kept.
+    /// Program the voice with the cutoff applied at once (x jumps).
+    /// Coefficient memories are reloaded; the signal state is kept.
     pub fn set(&mut self, words: [u32; 10], cutoff: u8, flags: u8) {
         self.words = words;
-        self.cutoff = cutoff;
         self.flags = flags;
-        self.apply();
+        self.set_cutoff(cutoff);
     }
 
+    /// Jump x to `cutoff`.
     pub fn set_cutoff(&mut self, cutoff: u8) {
         self.cutoff = cutoff;
+        self.interp.jump(cutoff);
         self.apply();
     }
 
-    /// Interpolate the codes at the cutoff and load the three sections.
+    /// Let x move from where it is to `cutoff` in about 32 << k samples
+    /// (FIG. 11). The codes follow x sample by sample.
+    pub fn sweep_to(&mut self, cutoff: u8, k: u8) {
+        self.cutoff = cutoff;
+        self.interp.set_target(cutoff, k);
+    }
+
+    /// The current interpolating variable.
+    pub fn x(&self) -> u16 {
+        self.interp.x
+    }
+
+    /// Interpolate the codes at the current x and load the three sections
+    /// (the coefficient math unit, four codes per section).
     fn apply(&mut self) {
+        let x = self.interp.x;
         let gain_mode = self.flags & FLAG_GAIN != 0;
         let unnorm = self.flags & FLAG_UNNORMALISED != 0;
         for k in 0..3 {
             let (px0, pf0, px255, pf255) = word_codes(self.words[POLE_WORDS[k]]);
-            let b2 = interp_q8(px0, px255, self.cutoff);
-            let b1 = interp_q8(pf0, pf255, self.cutoff);
+            let b2 = interp_x(px0, px255, x);
+            let b1 = interp_x(pf0, pf255, x);
             let third_is_gain = k == 2 && gain_mode;
             let (a2, a1) = if third_is_gain {
                 ((CODE_ONE_X as u16) << 8, (CODE_ONE_F as u16) << 8)
             } else {
                 let (zx0, zf0, zx255, zf255) = word_codes(self.words[ZERO_WORDS[k]]);
-                (
-                    interp_q8(zx0, zx255, self.cutoff),
-                    interp_q8(zf0, zf255, self.cutoff),
-                )
+                (interp_x(zx0, zx255, x), interp_x(zf0, zf255, x))
             };
             let s = &mut self.sections[k];
             s.dc = !(k > 0 && unnorm);
             s.set_codes_q8(b2, b1, a2, a1);
             if third_is_gain {
                 let (_, g0, _, g255) = word_codes(self.words[9]);
-                s.set_gain_q8(interp_q8(g0, g255, self.cutoff));
+                s.set_gain_q8(interp_x(g0, g255, x));
             } else {
                 s.with_gain = false;
             }
         }
+        self.applied_x = x;
     }
 
-    /// One sample through the three sections.
+    /// One sample: update x (FIG. 10), re-interpolate the codes if it
+    /// moved, then run the three sections.
     pub fn process(&mut self, x: i64) -> i64 {
+        self.interp.update();
+        if self.interp.x != self.applied_x {
+            self.apply();
+        }
         let mut v = x;
         for s in self.sections.iter_mut() {
             v = s.process(v);

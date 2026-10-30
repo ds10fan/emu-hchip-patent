@@ -6,6 +6,7 @@
 pub mod bits;
 pub mod coef;
 pub mod design;
+pub mod interp;
 pub mod microcode;
 pub mod mult;
 pub mod reference;

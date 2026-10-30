@@ -26,7 +26,8 @@ fn usage() -> ! {
   sine     [--dc] [--fc HZ] [--q Q] [--f HZ] [--sine-amp A]
                                  gain of one sine with the saturation counters
   voice    --type lp2|lp6|hp4 [--vq 0|64|127] --cutoff N   or   --words W0,..,W9 --flags F --cutoff N
-                                 decode the words of one voice and measure its response"
+                                 decode the words of one voice and measure its response
+           [--sweep-to N --time K]  instead: sweep the cutoff to N in 32<<K samples and print x and word 0 on the way"
     );
     std::process::exit(2)
 }
@@ -44,6 +45,8 @@ struct Opts {
     vtype: String,
     vq: u8,
     cutoff: u8,
+    sweep_to: Option<u8>,
+    time: u8,
     words: Option<[u32; 10]>,
     flags: u8,
     params: Params,
@@ -63,6 +66,8 @@ fn parse(args: &[String]) -> Opts {
         vtype: "lp2".into(),
         vq: 64,
         cutoff: 128,
+        sweep_to: None,
+        time: 5,
         words: None,
         flags: 0x40,
         params: Params::default(),
@@ -87,6 +92,8 @@ fn parse(args: &[String]) -> Opts {
             "--type" => o.vtype = val(&mut i).to_string(),
             "--vq" => o.vq = val(&mut i).parse().unwrap_or_else(|_| usage()),
             "--cutoff" => o.cutoff = val(&mut i).parse().unwrap_or_else(|_| usage()),
+            "--sweep-to" => o.sweep_to = Some(val(&mut i).parse().unwrap_or_else(|_| usage())),
+            "--time" => o.time = val(&mut i).parse().unwrap_or_else(|_| usage()),
             "--flags" => {
                 let v = val(&mut i);
                 o.flags =
@@ -291,6 +298,46 @@ fn main() {
             };
             let mut v = Voice::new(o.params);
             v.set(words, o.cutoff, flags);
+            if let Some(dest) = o.sweep_to {
+                v.sweep_to(dest, o.time);
+                println!(
+                    "sweep: cutoff {} -> {} in 32<<{} = {} samples; increment code {:02x} = {:+} per sample",
+                    o.cutoff,
+                    dest,
+                    o.time,
+                    hchip_filter::interp::approach_samples(o.time),
+                    v.interp.inc,
+                    v.interp.step()
+                );
+                println!(
+                    "{:>7} {:>6} {:>8} {:>8} {:>10} {:>9} {:>6}",
+                    "sample", "x", "X0 code", "F0 code", "B2'", "f0 [Hz]", "Q"
+                );
+                let total = hchip_filter::interp::approach_samples(o.time) as usize + 8;
+                let every = (total / 16).max(1);
+                for n in 0..=total {
+                    if n % every == 0 || v.interp.settled() {
+                        let x = v.x();
+                        let (x0, f0, x255, f255) = hchip_filter::voice::word_codes(words[0]);
+                        let xc = hchip_filter::voice::interp_x(x0, x255, x);
+                        let fc = hchip_filter::voice::interp_x(f0, f255, x);
+                        let e = v.sections[0].effective_coefs_f64();
+                        let (b1, b2) = hchip_filter::design::unprimes(e[1], e[0]);
+                        let (fhz, q) = hchip_filter::design::pole_fq(b1, b2, FS);
+                        println!(
+                            "{n:7} {x:6x} {:8.2} {:8.2} {:10.6} {fhz:9.1} {q:6.2}",
+                            xc as f64 / 256.0,
+                            fc as f64 / 256.0,
+                            e[0]
+                        );
+                        if v.interp.settled() {
+                            break;
+                        }
+                    }
+                    v.process(0);
+                }
+                return;
+            }
             println!(
                 "voice: words {:08X?}, cutoff {}, flags 0x{:02X} (gain word {}, unnormalised {})",
                 words,
