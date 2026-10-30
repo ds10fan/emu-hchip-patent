@@ -1,3 +1,5 @@
+![FIG. 6 of US 5,170,369: the filter section datapath](patent_figs/fig06.png)
+
 This is an implementation of the internals of the H-chip filter microcode and
 of whatever runs the microcode. The word widths and saturation are guessed;
 the only way to get at them is probably to decap the chip.
