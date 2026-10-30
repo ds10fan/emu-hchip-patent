@@ -89,8 +89,8 @@ let y = v.process(x);                     // one sample, 30 cycles
 
 ## Decisions not in the patent
 
-- Coefficient codes decode by the hidden-bit table recovered from the
-  firmware (`coef::decode_linear`), as table/2^18 for an X byte and
+- Coefficient codes decode by the hidden-bit table recovered by measurement
+  on the chip (`coef::decode_linear`), as table/2^18 for an X byte and
   table/2^16 for an F byte; one coefficient unit is 2^-18. Interpolated
   codes keep 8 fraction bits in the decoder's mantissa.
 - B1' and A1' are stored as differences from B2' and A2' and added in the

@@ -3,8 +3,8 @@
 //!
 //! The patent gives no code-to-value formula ("a ROM or a shifting
 //! technique", 5:55). The table used here, `decode_linear`, was recovered
-//! from the firmware that drives the chip and is an assumption of this
-//! model: a hidden-bit mantissa shifted by a 4-bit exponent, every 16 codes
+//! by measurement on the chip (VOICE_INTERFACE.md) and is an assumption of
+//! this model: a hidden-bit mantissa shifted by a 4-bit exponent, every 16 codes
 //! doubling the value, with the top range linear so that the value runs to
 //! 2^18 at code 255.
 //!
