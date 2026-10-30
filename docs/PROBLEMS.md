@@ -170,6 +170,28 @@ quantisation floor (the 6-pole at 5 kHz is −78 dB on a 2340 input) and are
 skipped; the 4th-order highpass below 200 Hz is pure noise because its
 attenuating zeros come before its amplifying unnormalised poles.
 
+## 16. Table II rounds negative increments toward minus infinity
+
+A first encoder divided the difference by the approach time and chose the
+nearest Table I value toward zero; 87 of 1248 checks against Table II
+failed, all at the top of negative ranges (−63489/32 = −1984.03 must give
+0xf0 = −2048, not 0xf1 = −1984). The hardware shifts the sign-extended
+difference right and keeps the top bits, which floors toward −∞ in both
+the division and the lattice. With that, every point of Table II matches.
+
+## 17. Negative increment codes are not in code order
+
+0x8f is −1 and 0x90 is −32: the hidden-bit code puts larger magnitudes at
+larger shift fields on both sides of zero, so a monotonicity check over
+code order fails for the negative half. Only a test assumption.
+
+## 18. Approach times are nominal
+
+Floor onto the lattice plus the forced carry make a 1024-sample sweep take
+1041 samples and a 32-sample one 34, while a difference below the time
+(257 over 4096 samples) arrives in 257 samples on the carry alone. Tests
+use windows, not exact counts.
+
 ## Smaller notes
 
 - MUX 16 needs a zero for the "& DC" and "& IDC" terms; nothing in the

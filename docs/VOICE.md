@@ -71,9 +71,12 @@ and F (low byte). The neutral word is 0xFFCFFFCF.
 
 ## Interpolation, and where the expansion sits
 
-The code at a cutoff is `c0 + (c255 − c0) · cutoff / 255`, kept with 8
-fraction bits (nearest 1/256). The decoder expands it with the fraction in
-the mantissa: LOGIC 43 takes the exponent from the integer part and BARREL
+The code at a cutoff is C(x) = c0 + x(c255 − c0) with x the voice's 16-bit
+interpolating variable, a cutoff byte duplicated (c·0x0101, so 255 is
+0xFFFF): no division, and c·0x0101/0xFFFF is exactly c/255. The result is
+kept with 8 fraction bits (nearest 1/256; at x = 0xFFFF it can be 1/256
+below c255 because 0xFFFF is 1 − 1/65536). The decoder expands it with the
+fraction in the mantissa: LOGIC 43 takes the exponent from the integer part and BARREL
 SHIFTER 44 shifts the hidden bit, the four mantissa bits and the eight
 fraction bits together. The value is piecewise linear between adjacent
 integer codes, including across exponent boundaries, which is what the
@@ -84,10 +87,9 @@ This is the patent's order: the coefficient math unit forms
 C(x) = Ca + x(Cb − Ca) and "the coefficient to be decoded ... would be the
 output of the coefficient math unit" (5:58-64). Expansion follows
 interpolation. The interpolation multiplies are the four free LATCH 18
-slots of the frame (rows 3, 6, 7, 8); here they are done in software. What
-the FIG. 10 to 12 hardware adds is the time behaviour of x (destination and
-approach time); that is the next step, and it changes nothing in the
-decoder.
+slots of the frame (rows 3, 6, 7, 8); here they are done in software. The
+FIG. 10 to 12 hardware moves x over time (destination and approach time):
+see INTERPOLATOR.md and `Voice::sweep_to`.
 
 ## Cost
 
@@ -165,8 +167,9 @@ attenuating zeros before the amplifying poles.
 
 ## What the voice does not model
 
-- The time behaviour of the cutoff (the interpolating variable x of
-  FIGs. 10 to 12). The cutoff is static; changing it reloads the codes.
+- How the E4 derives destination bytes and approach times from its
+  envelopes and modulation; the voice only offers `set_cutoff` (jump) and
+  `sweep_to` (destination and approach-time index).
 - How the chip multiplexes voices and sections; each section here has its
   own two-word delay memory and runs its full program.
 - The absolute output level, and any output or mixer gain outside the
